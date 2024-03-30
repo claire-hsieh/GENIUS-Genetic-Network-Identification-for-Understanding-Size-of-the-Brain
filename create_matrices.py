@@ -1,12 +1,11 @@
 from Bio import Phylo
 from io import StringIO
-import matplotlib.pyplot as plt
 import pandas as pd
-import regex as re
 import numpy as np
 import h5py
 from scipy.sparse import csr_matrix, save_npz
-import time
+import gzip as gz
+import os
 
 def create_matrices(tree_str, species_id_dict, count=1, print_tree=False, save_files=False, output_dir="."):
     # tic = time.perf_counter()
@@ -159,11 +158,11 @@ def create_matrices(tree_str, species_id_dict, count=1, print_tree=False, save_f
 
 
 if __name__ == "__main__":
-    with gz.open("../trees.txt.gz", "r") as f:
+    with gz.open("trees.txt.gz", "r") as f:
         lines = f.readlines()
         trees = [line.decode("utf-8").strip() for line in lines]
 
-    species_id = pd.read_csv("species_id.csv", header=None, index_col=1)
+    species_id = pd.read_csv("./trees/species_id.csv", header=None, index_col=1)
     species_id.columns = ["species"]
     species_id.index.name = "id"
 
@@ -171,7 +170,8 @@ if __name__ == "__main__":
     species_id_dict = species_id_dict["species"]
     i = 0
     for tree_str in trees:
+        i += 1
         print(i)
-        if not os.path.exists(f"./out/{i}/"):
-            os.makedirs(f"./outs/{i}/")
-        create_matrices(tree_str, species_id_dict, i, print_tree=False, save_files=True, output_dir=f"./test_100/{i}")
+        if not os.path.exists(f"./trees/all_trees/{i}/"):
+            os.makedirs(f"./trees/all_trees/{i}/")
+        create_matrices(tree_str, species_id_dict, i, print_tree=False, save_files=True, output_dir=f"./trees/all_trees/{i}")
