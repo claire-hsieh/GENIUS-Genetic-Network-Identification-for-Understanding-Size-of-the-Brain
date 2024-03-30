@@ -6,15 +6,10 @@ import regex as re
 import numpy as np
 import h5py
 from scipy.sparse import csr_matrix, save_npz
+import time
 
-species_id = pd.read_csv("species_id.csv", header=None, index_col=1)
-species_id.columns = ["species"]
-species_id.index.name = "id"
-
-species_id_dict = species_id.to_dict()
-species_id_dict = species_id_dict["species"]
-
-def create_matrices(tree_str, species_id_dict, count, print_tree=False, save_files=False, output_dir="."):
+def create_matrices(tree_str, species_id_dict, count=1, print_tree=False, save_files=False, output_dir="."):
+    # tic = time.perf_counter()
     tree = Phylo.read(StringIO(tree_str), "newick")
     node = 0
     num_nodes = 0
@@ -23,6 +18,8 @@ def create_matrices(tree_str, species_id_dict, count, print_tree=False, save_fil
     event_row = []
     species_row = [] # ids 
     species_col = [] # names
+    root = True
+    parent_node = "0"
 
     # initialize events, species, and adjacency matrix
     for clade in tree.find_clades():
@@ -33,7 +30,10 @@ def create_matrices(tree_str, species_id_dict, count, print_tree=False, save_fil
         else:
             terminal_nodes += 1
             species_row.append(clade.name)
-            species_name = species_id_dict[clade.name]
+            try:
+                species_name = species_id_dict[clade.name]
+            except:
+                species_name = clade.name
             species_col.append(species_name)
         event_row.append(clade.name)
         
@@ -44,8 +44,11 @@ def create_matrices(tree_str, species_id_dict, count, print_tree=False, save_fil
     parent = event_row.copy()
     child = event_row.copy()
     adjacency = np.zeros((len(parent), len(child)))
-
+    # toc = time.perf_counter()
+    # print(f"Initialization: {toc - tic:0.4f} seconds")
+    
     # fill out matrices
+    # tic = time.perf_counter()
     for clade in tree.find_clades():
         if ':[' in clade.name:
             name, nhx_string = clade.name.split(':[')
@@ -70,78 +73,105 @@ def create_matrices(tree_str, species_id_dict, count, print_tree=False, save_fil
 
         # Species matrix
         if clade.name in species_row:
-            # species_name = species_id[species_id["id"] == clade.name].index[0]
-            species_name = species_id_dict[clade.name]
-            species[species_row.index(clade.name), species_col.index(species_name)] = 1
-            
+            try:
+                species_name = species_id_dict[clade.name]
+                species[species_row.index(clade.name), species_col.index(species_name)] = 1
+            except:
+                pass # species isn't defined in SEQ, will not have entry in species, [FIX LATER]            
         # Adjacency matrix
-        root = True
-        parent_node = "0"
-        for clade in tree.find_clades():
-            if root:
+        if root:
+            parent_node = clade.name
+        else:
+            if str(clade.name).isdigit():
+                adjacency[parent.index(parent_node), child.index(clade.name)] = 1
                 parent_node = clade.name
-            else:
-                if str(clade.name).isdigit():
-                    adjacency[parent.index(parent_node), child.index(clade.name)] = 1
-                    parent_node = clade.name
-                else: # terminal node
-                    adjacency[parent.index(parent_node), child.index(clade.name)] = 1
-            root = False
+            else: # terminal node
+                adjacency[parent.index(parent_node), child.index(clade.name)] = 1
+        root = False
         node += 1
-
+    # toc = time.perf_counter()
+    # print(f"Matrix filling: {toc - tic:0.4f} seconds")
+    # tic = time.perf_counter()
     # Draw tree
     # add speciation / duplication events
-    for clade in tree.find_clades():
-        if clade.name.isdigit():
-            if "D=Y" in clade.comment:
-                clade.name += "(D)"
-            elif "D=N" in clade.comment:
-                clade.name += "(S)"
     if print_tree:
+        for clade in tree.find_clades():
+            if clade.name.isdigit():
+                if "D=Y" in clade.comment:
+                    clade.name += "(D)"
+                elif "D=N" in clade.comment:
+                    clade.name += "(S)"
         Phylo.draw(tree)
                 
     if save_files:
         if not os.path.exists(f"{output_dir}/"):
             os.makedirs(f"{output_dir}/")
+
         with h5py.File(f"{output_dir}/event_{count}.h5", "w") as f:
-            f.create_dataset("events", data=events)
-            f.create_dataset("event_rows", data=np.array(event_row, dtype='S'))
-            f.create_dataset("event_columns", data=np.array(event_columns, dtype='S'))
+            event_sparse = csr_matrix(events)
+            f.create_dataset('events_data', data=event_sparse.data, compression="gzip", compression_opts=9)
+            f.create_dataset('events_indices', data=event_sparse.indices, compression="gzip", compression_opts=9)
+            f.create_dataset('events_indptr', data=event_sparse.indptr, compression="gzip", compression_opts=9)
+            f.create_dataset('events_shape', data=event_sparse.shape, compression="gzip", compression_opts=9)
+            f.create_dataset("event_rows", data=np.array(event_row, dtype='S'), compression="gzip", compression_opts=9)
+            f.create_dataset("event_columns", data=np.array(event_columns, dtype='S'), compression="gzip", compression_opts=9)
 
         with h5py.File(f"{output_dir}/species_{count}.h5", "w") as f:
-            f.create_dataset("species", data=species)
-            f.create_dataset("species_rows", data=np.array(species_row, dtype='S'))
-            f.create_dataset("species_columns", data=np.array(species_col, dtype='S'))
+            species_sparse = csr_matrix(species)
+            f.create_dataset('species_data', data=event_sparse.data, compression="gzip", compression_opts=9)
+            f.create_dataset('species_indices', data=event_sparse.indices, compression="gzip", compression_opts=9)
+            f.create_dataset('species_indptr', data=event_sparse.indptr, compression="gzip", compression_opts=9)
+            f.create_dataset('species_shape', data=event_sparse.shape, compression="gzip", compression_opts=9)
+            f.create_dataset("species_rows", data=np.array(species_row, dtype='S'), compression="gzip", compression_opts=9)
+            f.create_dataset("species_columns", data=np.array(species_col, dtype='S'), compression="gzip", compression_opts=9)
                 
         with h5py.File(f"{output_dir}/adjacency_{count}.h5", "w") as f:
-            f.create_dataset("adjacency", data=adjacency)
-            f.create_dataset("parent", data=np.array(parent, dtype='S'))
-            f.create_dataset("child", data=np.array(child, dtype='S'))
-    
+            adjacency_sparse = csr_matrix(adjacency)
+            f.create_dataset('adjacency_data', data=event_sparse.data, compression="gzip", compression_opts=9)
+            f.create_dataset('adjacency_indices', data=event_sparse.indices, compression="gzip", compression_opts=9)
+            f.create_dataset('adjacency_indptr', data=event_sparse.indptr, compression="gzip", compression_opts=9)
+            f.create_dataset('adjacency_shape', data=event_sparse.shape, compression="gzip", compression_opts=9)
+            f.create_dataset("parent", data=np.array(parent, dtype='S'), compression="gzip", compression_opts=9)
+            f.create_dataset("child", data=np.array(child, dtype='S'), compression="gzip", compression_opts=9)
+
+        # print(f"Saving files: {toc - tic:0.4f} seconds")
+
     # if save_files:
+    #     if not os.path.exists(f"{output_dir}/"):
+    #         os.makedirs(f"{output_dir}/")
     #     event_sparse = csr_matrix(events)        
     #     save_npz(f'{output_dir}/events.npz', event_sparse)
-    #     np.load('f{output_dir}/event_row.npy', event_row)
-    #     np.load('f{output_dir}/event_columns.npy', event_columns)
+    #     np.save(f'{output_dir}/event_row.npy', event_row)
+    #     np.save(f'{output_dir}/event_columns.npy', event_columns)
 
     #     species_sparse = csr_matrix(species)        
-    #     save_npz('f{output_dir}/species.npz', species_sparse)
-    #     np.load('f{output_dir}/species_row.npy', species_row)
-    #     np.load('f{output_dir}/species_columns.npy', species_col)
+    #     save_npz(f'{output_dir}/species.npz', species_sparse)
+    #     np.save(f'{output_dir}/species_row.npy', species_row)
+    #     np.save(f'{output_dir}/species_columns.npy', species_col)
 
     #     adjacency_sparse = csr_matrix(adjacency)        
-    #     save_npz('f{output_dir}/adjacency.npz', adjacency_sparse)
-    #     np.load('f{output_dir}/adjacency_row.npy', parent)
-    #     np.load('f{output_dir}/adjacency_columns.npy', child)
+    #     save_npz(f'{output_dir}/adjacency.npz', adjacency_sparse)
+    #     np.save(f'{output_dir}/adjacency_indices.npy', parent)
+    #     # np.save(f'{output_dir}/adjacency_columns.npy', child)
 
     else:
         return tree, events, event_row, event_columns, species, species_row, species_col, adjacency, parent, child
-    
-# Creating matrices for first 100 trees
-i = 0
-for tree_str in trees:
-    if i < 100: i += 1
-    else: break
-    if not os.path.exists(f"./trees/{i}/"):
-        os.makedirs(f"./trees/{i}/")
-    create_matrices(tree_str, species_id_dict, i, print_tree=False, save_files=True, output_dir=f"./trees/{i}/")
+
+
+if __name__ == "__main__":
+    with gz.open("../trees.txt.gz", "r") as f:
+        lines = f.readlines()
+        trees = [line.decode("utf-8").strip() for line in lines]
+
+    species_id = pd.read_csv("species_id.csv", header=None, index_col=1)
+    species_id.columns = ["species"]
+    species_id.index.name = "id"
+
+    species_id_dict = species_id.to_dict()
+    species_id_dict = species_id_dict["species"]
+    i = 0
+    for tree_str in trees:
+        print(i)
+        if not os.path.exists(f"./out/{i}/"):
+            os.makedirs(f"./outs/{i}/")
+        create_matrices(tree_str, species_id_dict, i, print_tree=False, save_files=True, output_dir=f"./test_100/{i}")
