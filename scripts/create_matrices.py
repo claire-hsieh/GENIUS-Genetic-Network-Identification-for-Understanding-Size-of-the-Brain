@@ -15,11 +15,11 @@ class Matrix:
     def __init__(self, tree_str, species_id_dict, print_tree=False, save_files=False, output_dir="./out", count=1):
         self.tree, self.events, self.event_row, self.event_columns, self.species, self.species_row, self.species_col, self.species_internal, self.species_internal_row, self.adjacency, self.parent = self.create_matrices(tree_str, species_id_dict, print_tree=False, save_files=False, output_dir="./out")
         if save_files:
-            self.create_h5_file(events, "events", output_dir, count, event_row, event_columns)
-            self.create_h5_file(species, "species", output_dir, count, species_row, species_col)
-            self.create_h5_file(adjacency, "adjacency", output_dir, count, parent)
-            self.create_h5_file(species_internal, "species_internal", output_dir, count, species_internal_row)
-                            
+            self.create_h5_file(self.events, "events", output_dir, count, self.event_row, self.event_columns)
+            self.create_h5_file(self.species, "species", output_dir, count, self.species_row, self.species_col)
+            self.create_h5_file(self.adjacency, "adjacency", output_dir, count, self.parent)
+            self.create_h5_file(self.species_internal, "species_internal", output_dir, count, self.species_internal_row)
+                         
     def get_ancestors(self, node, species_name, matrix, row, col, adjacency_df):
         try:
             ancestor = adjacency_df.loc[adjacency_df[node] == 1].index[0]
