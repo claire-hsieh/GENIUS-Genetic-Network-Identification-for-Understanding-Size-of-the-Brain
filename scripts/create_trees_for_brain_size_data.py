@@ -51,14 +51,14 @@ for key, value in trees_w_threshold.items():
 
 for file in os.listdir("../trees/brain/"):
 	print(file)
-    if file.endswith(".txt"):
-        with open(f"../trees/brain/trees_50.txt", "r") as f:
-            trees = f.readlines()
-            i = 0
-            x = str(file).split("_")[1].split(".")[0]
-            output_dir = f"../trees/brain/{x}/"
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            for tree in trees:
-                matrix = Matrix(tree, species_id_dict, print_tree=False, save_files=True, output_dir=output_dir, count=i)
-                i += 1
+	if file.endswith(".txt"):
+		with open(f"../trees/brain/trees_50.txt", "r") as f:
+			trees = f.readlines()
+			i = 0
+			x = str(file).split("_")[1].split(".")[0]
+			output_dir = f"../trees/brain/{x}/"
+			if not os.path.exists(output_dir):
+				os.makedirs(output_dir)
+			for tree in trees:
+				matrix = Matrix(tree, species_id_dict, print_tree=False, save_files=True, output_dir=output_dir, count=i)
+				i += 1

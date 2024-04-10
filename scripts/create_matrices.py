@@ -13,18 +13,7 @@ import regex as re
 class Matrix:
 
     def __init__(self, tree_str, species_id_dict, print_tree=False, save_files=False, output_dir="./out", count=1):
-		tree, events, event_row, event_columns, species, species_row, species_col, species_internal, species_internal_row, adjacency, parent = self.create_matrices(tree_str, species_id_dict, print_tree=False, save_files=False, output_dir="./out")
-        self.tree = tree
-        self.events = events
-        self.event_row = event_row
-        self.event_columns = event_columns
-        self.species = species
-        self.species_row = species_row
-        self.species_col = species_col
-        self.species_internal = species_internal
-        self.species_internal_row = species_internal_row
-        self.adjacency = adjacency
-        self.parent = parent
+        self.tree, self.events, self.event_row, self.event_columns, self.species, self.species_row, self.species_col, self.species_internal, self.species_internal_row, self.adjacency, self.parent = self.create_matrices(tree_str, species_id_dict, print_tree=False, save_files=False, output_dir="./out")
         if save_files:
             self.create_h5_file(events, "events", output_dir, count, event_row, event_columns)
             self.create_h5_file(species, "species", output_dir, count, species_row, species_col)
