@@ -26,7 +26,7 @@ class Matrix:
         except:
             ancestor = None
         if ancestor != None:
-            matrix[row.index(ancestor), col.index(species_name)] = 1
+            matrix[row.index(ancestor), col.index(species_name)] += 1
             return self.get_ancestors(ancestor, species_name, matrix, row, col, adjacency_df)
 
     def create_h5_file(self, matrix, matrix_name, output_dir, count, row, column=""):
