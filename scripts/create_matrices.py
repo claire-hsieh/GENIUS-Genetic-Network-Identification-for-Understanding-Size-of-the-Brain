@@ -32,7 +32,9 @@ class Matrix:
     def create_h5_file(self, matrix, matrix_name, output_dir, count, row, column=""):
         with h5py.File(f"{output_dir}/{matrix_name}_{count}.h5", "w") as f:
             matrix_sparse = csr_matrix(matrix)
-            # f.create_dataset(f'{matrix_name}_data', data=matrix_sparse.data, compression="gzip", compression_opts=9)
+            if matrix_name == "species_internal":
+                f.create_dataset(f'{matrix_name}_data', data=matrix_sparse.data, compression="gzip", compression_opts=9)
+                print(matrix_name)
             f.create_dataset(f'{matrix_name}_indices', data=matrix_sparse.indices, compression="gzip", compression_opts=9)
             f.create_dataset(f'{matrix_name}_indptr', data=matrix_sparse.indptr, compression="gzip", compression_opts=9)
             f.create_dataset(f'{matrix_name}_shape', data=matrix_sparse.shape, compression="gzip", compression_opts=9)
