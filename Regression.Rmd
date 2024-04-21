@@ -1,0 +1,103 @@
+---
+title: "Regression"
+author: "Claire Hsieh"
+date: "2024-04-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(glmnet)
+library(reticulate)
+library(tidyverse)
+library(glue)
+library(stringr)
+
+# Seeing your environments
+conda_list()
+
+conda_list()[[1]][3] %>% 
+use_condaenv(required = TRUE)
+
+# Using python b/c there's no way I'm re-writing anything in R
+source_python("../scripts/print_h5py_file.py")
+np <- import("numpy", convert = FALSE)
+
+brain_size = read_csv("../data/gyz043_suppl_Supplement_Data.csv")
+brain_size$Binomial <- tolower(brain_size$Binomial)
+
+```
+
+```{r}
+some_regression <- function(species_internal, brain_size, feature_select = TRUE, p_vals = FALSE){
+  # reformat data 
+  # only keep cols of internal matrix that we have brain_size data for
+  # subset brain_size to only keep rows for species in internal matrix
+  x = species_internal[[1]]
+  x <- as.data.frame(x)
+  x <- x[, rowSums(x != 0) > 0]
+  new_df <- data.frame(colnames(x))
+  colnames(new_df) = c("Binomial")
+  merged = left_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
+  x = t(x[na.omit(merged)$Binomial])
+  y = na.omit(merged$Brain.resid)
+  
+  if (feature_select == TRUE){
+    glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse')
+    co<-coef(glmnet1,s = "lambda.1se") # value of lambda that gives the simplest model within one standard error of the minimum cross-validated error.
+    inds<-which(co!=0)
+    variables<-row.names(co)[inds]
+    variables<-variables[!(variables %in% '(Intercept)')];
+    return(variables)
+  }
+  
+  else if (p_vals == TRUE){
+    summ = summary(glm(y ~ x))
+    return(summ)
+  }
+  else{
+    cvfit <- cv.glmnet(x, y)
+    return(cvfit)
+  }
+
+
+} 
+```
+
+
+```{r}
+# Feature Selection
+
+# loop through trees with >50 species in brain size dataset
+# do feature selection using cv.glmnet
+# output: files with format:  {tree_number}, {significant node}
+
+num = 50
+num_files = 0
+for(num in c(50:64)){
+num_files = length(list.files(glue("../trees/brain/{num}/"))) + num_files
+}
+
+
+for(num in c(50:64)){
+  file.create(glue("sig_vals/significant_vals_{num}.txt"))
+  files <- list.files(path=glue("../trees/brain/{num}/"), pattern="species_internal*", full.names=TRUE, recursive=FALSE)
+  for (fl in files){
+    match <- str_extract(fl, "_\\d+")
+    i = substr(str_extract(match, "_\\d+"), 2, nchar(match))
+    tryCatch({
+      species = print_h5py_file(glue("../trees/brain/{num}/species_{i}.h5"), "species")
+      species_internal = print_h5py_file(glue("../trees/brain/{num}/species_internal_{i}.h5"), "species_internal", cols=np$array(species[[5]]))
+      vars = some_regression(species_internal, brain_size)
+      if ((length(vars) > 0)) {
+        write(glue("{i}, {vars}"), glue("sig_vals/significant_vals_{num}.txt"), append=TRUE)
+      } 
+    })
+  }
+}
+
+```
