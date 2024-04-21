@@ -1,0 +1,5 @@
+# Brain Project
+
+Associating genes directly to phenotypes is a major challenge in genetics as genes often have small effect, are influenced by any number of regulatory elements, can be influenced by the environment and so on and so forth. There are entire fields (comparitive genomics) dedicated to the study of these relationships and inferring gene-phenotype associations. And currently, many of the studies linking genes to phenotypes use copy number variation (not sure if this is true??), leaving out much of the fine-grained detail about orthologs, paralogs, and the evolutionary history in the gene tree. In this project, we aim to use (entire) gene trees (from Ensembl for now) to infer gene-phenotype associations. Here, we're looking at brain size, but this method can likely be used with all sorts of traits.
+
+- data can be found [here](https://ftp.ensemblgenomes.ebi.ac.uk/pub/current/pan_ensembl/emf/ensembl-compara/homologies/)
