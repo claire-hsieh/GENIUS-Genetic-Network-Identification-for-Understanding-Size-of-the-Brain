@@ -9,6 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Initialization
 
 ```{r}
 library(glmnet)
@@ -31,6 +32,8 @@ brain_size = read_csv("../data/gyz043_suppl_Supplement_Data.csv")
 brain_size$Binomial <- tolower(brain_size$Binomial)
 
 ```
+
+# Regression
 
 ```{r}
 some_regression <- function(species_internal, brain_size, feature_select = TRUE, p_vals = FALSE){
@@ -101,3 +104,49 @@ for(num in c(50:64)){
 }
 
 ```
+
+# Selecting Trees
+
+```{r}
+rank_trees <- function(species_internal, brain_size){
+  x = species_internal[[1]]
+  x <- as.data.frame(x)
+  x <- x[, rowSums(x != 0) > 0]
+  new_df <- data.frame(colnames(x))
+  colnames(new_df) = c("Binomial")
+  merged = left_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
+  x = t(x[na.omit(merged)$Binomial])
+  y = na.omit(merged$Brain.resid)
+  glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse')
+  rsq = 1 - glmnet1$cvm/var(y)
+  tmp = c(glmnet1$cvm[1], min(glmnet1$cvm), mean(glmnet1$cvsd), rsq)
+  return(tmp)
+  # should i have something that takes into account standard error??
+  # return(c(glmnet1$cvm[1], min(glmnet1$cvm), mean(glmnet1$cvsd)))
+} 
+
+```
+
+
+```{r}
+for(num in c(50:64)){
+  file.create(glue("sig_vals/{num}.txt"))
+  files <- list.files(path=glue("../trees/brain/{num}/"), pattern="species_internal*", full.names=TRUE, recursive=FALSE)
+  for (fl in files){
+    match <- str_extract(fl, "_\\d+")
+    i = substr(str_extract(match, "_\\d+"), 2, nchar(match))
+    tryCatch({
+      # print(glue("{num}, {i}"))
+      species = print_h5py_file(glue("../trees/brain/{num}/species_{i}.h5"), "species")
+      species_internal = print_h5py_file(glue("../trees/brain/{num}/species_internal_{i}.h5"), "species_internal", cols=np$array(species[[5]]))
+      tmp = rank_trees(species_internal, brain_size)
+      delta = round(tmp[1] - tmp[2], digits = 10)
+      # if((tmp[1] - tmp[2]) > (tmp[2] + tmp[3])){
+      write(glue("{num_i}, {delta}, {tmp[3]}, {tmp[4]}"), glue("sig_vals/{num}.txt"), append=TRUE)
+      # num_species_in_tree_tree_num, difference in mse, mean std dev, R2
+      # }
+    })
+  }
+}
+```
+
