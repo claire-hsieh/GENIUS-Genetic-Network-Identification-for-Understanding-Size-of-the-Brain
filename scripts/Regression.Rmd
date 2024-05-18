@@ -113,8 +113,7 @@ rank_trees <- function(species_internal, brain_size){
   new_df <- data.frame(colnames(x))
   colnames(new_df) = c("Binomial")
   merged = left_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
-  x = t(x[na.omit(merged)$Binomial]) 
-  x <- x[, rowSums(x != 0) > 0] %>% scale()
+  x = t(x[na.omit(merged)$Binomial]) %>% scale()
   x[is.nan(x)] <- 0
   y = scale(na.omit(merged$Brain.resid))
   glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse', standardize=FALSE)
@@ -131,10 +130,12 @@ rank_trees <- function(species_internal, brain_size){
 
 
 ```{r}
+library(beepr)
+start.time <- Sys.time()
 for(num in c(50:64)){
-  file.create(glue("../claires-secret-folder/sig_vals/std/{num}.txt"))
+  file.create(glue("../claires-secret-folder/sig_vals/std2/{num}.txt"))
   files <- list.files(
-              path=glue("../trees/brain/{num}/"), 
+              path=glue("../trees/brain2/{num}/"), 
               pattern="species_internal*", 
               full.names=TRUE, 
               recursive=FALSE)
@@ -146,10 +147,10 @@ for(num in c(50:64)){
     tryCatch({
       # print(glue("{num}, {i}"))
       species = print_h5py_file(
-                glue("../trees/brain/{num}/species_{i}.h5"), 
+                glue("../trees/brain2/{num}/species_{i}.h5"), 
                 "species")
       species_internal = print_h5py_file(
-                glue("../trees/brain/{num}/species_internal_{i}.h5"), 
+                glue("../trees/brain2/{num}/species_internal_{i}.h5"), 
                 "species_internal", 
                 cols=np$array(species[[5]]))
       
@@ -157,13 +158,18 @@ for(num in c(50:64)){
       delta = round(tmp[1] - tmp[2], digits = 10)
       # if((tmp[1] - tmp[2]) > (tmp[2] + tmp[3])){
       write(glue("{i}, {delta}, {tmp[3]}, {tmp[4]}"), 
-            file = glue("../claires-secret-folder/sig_vals/std/{num}.txt"), 
+            file = glue("../claires-secret-folder/sig_vals/std2/{num}.txt"), 
             append=TRUE)
       # num_species_in_tree_tree_num, difference in mse, mean std dev, R2
       # }
     })
   }
 }
+
+beep(sound = 1, expr = NULL)
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
 ```
 
 
