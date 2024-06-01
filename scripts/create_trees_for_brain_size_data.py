@@ -49,18 +49,16 @@ if get_trees_threshold:
 			for tree in value:
 				w.write(f"{tree}\n")
 
-for file in os.listdir("../trees/brain/"):
+for file in os.listdir("../trees/brain2/"):
 	if file.endswith(".txt"):
-		if file.split("_")[1].split(".")[0] in [str(i) for i in range(52,62)]:
-			print(file)
-			with open(f"../trees/brain/{file}", "r") as f:
-				trees = f.readlines()
-				i = 0
-				x = str(file).split("_")[1].split(".")[0]
-				output_dir = f"../trees/brain/{x}/"
-				if not os.path.exists(output_dir):
-					os.makedirs(output_dir)
-				for tree in trees:
-					matrix = Matrix(tree, species_id_dict, print_tree=False, save_files=True, output_dir=output_dir, count=i)
-					i += 1
-	
+		print(file)
+		with open(f"../trees/brain2/{file}", "r") as f:
+			trees = f.readlines()
+			i = 0
+			x = str(file).split("_")[1].split(".")[0]
+			output_dir = f"../trees/brain2/{x}/"
+			if not os.path.exists(output_dir):
+				os.makedirs(output_dir)
+			for tree in trees:
+				matrix = Matrix(tree, species_id_dict, print_tree=False, save_files=True, output_dir=output_dir, count=i)
+				i += 1

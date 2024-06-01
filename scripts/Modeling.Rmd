@@ -1,0 +1,814 @@
+---
+title: "Regression"
+author: "Claire Hsieh"
+date: "2024-04-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Initialization
+
+```{r}
+library(glmnet)
+library(reticulate)
+library(tidyverse)
+library(glue)
+library(stringr)
+library(ggplot2)
+library(confintr)
+library(pwr)
+library(ggrepel)
+
+# Seeing your environments
+conda_list()
+
+conda_list()[[1]][3] %>% 
+use_condaenv(required = TRUE)
+
+# Using python 
+source_python("create_matrices.py")
+np <- import("numpy", convert = FALSE)
+
+brain_size = read_csv("../data/gyz043_suppl_Supplement_Data.csv")
+brain_size$Binomial <- tolower(brain_size$Binomial)
+
+all_prot = read_csv("../data/all_proteome.csv")
+
+
+```
+
+```{r}
+birds = c("rheiformes","tinamiformes","casuariiformes","apterygiformes","anseriformes","galliformes","phoenicopteriformes","podicipediformes","columbiformes","mesitornithiformes","pterocliformes","otidiformes","musophagiformes","cuculiformes","caprimulgiformes","opisthocomiformes","gruiformes","charadriiformes","eurypygiformes","phaethontiformes","gaviiformes","sphenisciformes","procellariiformes","ciconiiformes-","suliformes","pelecaniformes","cathartiformes","accipitriformes","strigiformes","coliiformes","leptosomiformes","trogoniformes","bucerotiformes","coraciiformes","galbuliformes","piciformes","cariamiformes","falconiformes","psittaciformes","passeriformes")
+for (i in birds){
+  if(i %in% tolower(brain_size$order)){
+    print(i)
+  }
+}
+
+
+# no birds
+```
+
+
+```{r}
+num = 50
+i = 1
+files <- list.files(
+              path=glue("../trees/brain/{num}/"), 
+              pattern="species_internal*", 
+              full.names=TRUE, 
+              recursive=FALSE)
+  
+fl = files[0]
+
+match <- str_extract(fl, "_\\d+")
+i = substr(str_extract(match, "_\\d+"), 2, nchar(match))
+    
+species = load_sparse_csr(glue("../trees/brain/{num}/species_{i}.h5"))
+```
+
+# Regression
+
+```{r}
+some_regression <- function(species_internal, brain_size, feature_select = TRUE, p_vals = FALSE){
+  # reformat data 
+  # only keep cols of internal matrix that we have brain_size data for
+  # subset brain_size to only keep rows for species in internal matrix
+  x = species_internal[[1]]
+  x <- as.data.frame(x)
+  x <- x[, rowSums(x != 0) > 0]
+  new_df <- data.frame(colnames(x))
+  colnames(new_df) = c("Binomial")
+  merged = left_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
+  x = t(x[na.omit(merged)$Binomial])
+  y = na.omit(merged$Brain.resid)
+  
+  if (feature_select == TRUE){
+    glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse')
+    co<-coef(glmnet1,s = "lambda.1se") # value of lambda that gives the simplest model within one standard error of the minimum cross-validated error.
+    inds<-which(co!=0)
+    variables<-row.names(co)[inds]
+    variables<-variables[!(variables %in% '(Intercept)')];
+    return(variables)
+  }
+  
+  else if (p_vals == TRUE){
+    summ = summary(glm(y ~ x))
+    return(summ)
+  }
+  else{
+    cvfit <- cv.glmnet(x, y)
+    return(cvfit)
+  }
+
+
+} 
+```
+
+
+```{r}
+# Feature Selection
+
+# loop through trees with >50 species in brain size dataset
+# do feature selection using cv.glmnet
+# output: files with format:  {tree_number}, {significant node}
+
+num = 50
+num_files = 0
+for(num in c(50:64)){
+num_files = length(list.files(glue("../trees/brain/{num}/"))) + num_files
+}
+
+
+for(num in c(50:64)){
+  file.create(glue("sig_vals/significant_vals_{num}.txt"))
+  files <- list.files(path=glue("../trees/brain/{num}/"), pattern="species_internal*", full.names=TRUE, recursive=FALSE)
+  for (fl in files){
+    match <- str_extract(fl, "_\\d+")
+    i = substr(str_extract(match, "_\\d+"), 2, nchar(match))
+    tryCatch({
+      species = print_h5py_file(glue("../trees/brain/{num}/species_{i}.h5"), "species")
+      species_internal = print_h5py_file(glue("../trees/brain/{num}/species_internal_{i}.h5"), "species_internal", cols=np$array(species[[5]]))
+      vars = some_regression(species_internal, brain_size)
+      if ((length(vars) > 0)) {
+        write(glue("{i}, {vars}"), glue("sig_vals/significant_vals_{num}.txt"), append=TRUE)
+      } 
+    })
+  }
+}
+
+```
+
+# Selecting Trees
+
+```{r}
+rank_trees <- function(species_internal, brain_size){
+  x = species_internal
+  new_df <- data.frame(colnames(x))
+  colnames(new_df) = c("Binomial")
+  merged = left_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
+  x = t(x[na.omit(merged)$Binomial]) %>% scale()
+  x[is.nan(x)] <- 0
+  y = scale(na.omit(merged$Brain.resid))
+  glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse', standardize=FALSE)
+  # if standardize=TRUE, glmnet standardizes x values, but coefficients are returned on original scale
+  rsq = 1 - glmnet1$cvm/var(y)
+  tmp = c(glmnet1$cvm[1], min(glmnet1$cvm), mean(glmnet1$cvsd), max(rsq))
+  # use max R-squared??, why are delta and R2 comparable anyway??
+  return(tmp)
+  # should i have something that takes into account standard error??
+  # return(c(glmnet1$cvm[1], min(glmnet1$cvm), mean(glmnet1$cvsd)))
+} 
+
+```
+
+
+```{r}
+library(beepr)
+start.time <- Sys.time()
+for(num in c(50:64)){
+  file.create(glue("../claires-secret-folder/sig_vals/std3/{num}.txt"))
+  files <- list.files(
+              path=glue("../trees/brain2/{num}/"), 
+              pattern = "species_internal_\\d+\\.npz$",
+              full.names=TRUE, 
+              recursive=FALSE)
+  
+  for (fl in files){
+    match <- str_extract(fl, "_\\d+")
+    i = substr(str_extract(match, "_\\d+"), 2, nchar(match))
+    
+    tryCatch({
+      # print(glue("{num}, {i}"))
+      # species = format_matrices(glue("../trees/brain2/{num}/"), i, "species")
+      species_internal = format_matrices(glue("../trees/brain2/{num}/"), i, "species_internal")
+      
+      tmp = rank_trees(species_internal, brain_size)
+      delta = round(tmp[1] - tmp[2], digits = 10)
+      # if((tmp[1] - tmp[2]) > (tmp[2] + tmp[3])){
+      write(glue("{i}, {delta}, {tmp[3]}, {tmp[4]}"), 
+            file = glue("../claires-secret-folder/sig_vals/std3/{num}.txt"), 
+            append=TRUE)
+      # num_species_in_tree_tree_num, difference in mse, mean std dev, R2
+      # }
+    })
+  }
+}
+
+beep(sound = 1, expr = NULL)
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
+```
+
+# Finding genes in selected models
+
+```{r}
+get_descendants <- function(root, adjacency_matrix) {
+  descendants <- list()
+  nodes <- colnames(adjacency_matrix)
+  root_index <- which(nodes == root)
+  for (i in seq_along(adjacency_matrix[root_index, ])) {
+    if (adjacency_matrix[root_index, i] > 0 ) {
+      descendant <- nodes[i]
+      descendants <- c(descendants, descendant)
+      descendants <- c(descendants, get_descendants(descendant, adjacency_matrix))
+    }
+  }
+  return(descendants)
+}
+
+find_genes <- function(num, tree_num, write=FALSE, output_file="tmp.txt"){
+  species_internal = format_matrices(glue("../trees/brain2/{num}/"), tree_num, "species_internal")
+  x = species_internal
+  new_df <- data.frame(colnames(x))
+  colnames(new_df) = c("Binomial")
+  merged = left_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
+  x = t(x[na.omit(merged)$Binomial]) 
+  x[is.nan(x)] <- 0
+  y = scale(na.omit(merged$Brain.resid))
+  glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse', standardize=FALSE)
+  
+  co = coef(glmnet1)
+  inds<-which(co!=0)
+  variables<-row.names(co)[inds]
+  variables<-variables[!(variables %in% '(Intercept)')];
+  variables = as.integer(c(variables))
+  species = format_matrices(glue("../trees/brain2/{num}/"), tree_num, "species")
+  
+    if (! file.exists(output_file)){
+      file.create(output_file)
+    }
+  
+  for (var in variables){
+    # ind = 1
+    # genes = list()
+    # for (sp in colnames(species_internal[,which(species_internal[var+1,] != 0)])){
+    #   genes = append(genes, list(sp,rownames(species)[which(species[sp] != 0)]))  
+    # }
+    # write(glue("{num},{tree_num},{var},{co@x[ind]},{sapply(genes, function(x) paste(unlist(x), collapse = ','))}"), 
+    #   file = output_file, 
+    #   append=TRUE)
+    for (tr in unlist(get_descendants(var, adjacency))){
+      if (! grepl("^\\d+$", tr)){ # check if tr is leaf (ie ensembl_id)
+        sp = colnames(species)[which(species[tr,] != 0)]
+        brain_resid = brain_size[which(brain_size['Binomial'] == sp),]['Brain.resid']
+        if (dim(brain_resid)[1] != 0){
+          write(glue("{sp},{tr},{brain_resid}"), 
+                file = output_file,
+                append=TRUE)
+        }
+    }
+  }
+    
+    
+  }   
+}
+
+which(brain_size["Binomial"] == "homo_sapiens")
+```
+
+
+```{r}
+# top_models = c('453_60', '453_60', '878_64', '446_59', '627_64', '26_50',
+#        '476_61', '743_60', '334_57', '476_61', '332_57', '2_52', '481_58',
+#        '743_60', '332_57', '170_64', '108_54', '88_51', '150_57',
+#        '444_58')
+top_models = c('2_52', '476_61', '23_53', '878_64', '743_60', '1663_62', '880_64',
+       '88_51', '289_58', '585_59', '26_50', '444_58', '278_57', '150_57',
+       '481_58', '446_59', '1611_63', '184_54', '453_60', '299_61',
+       '213_54', '334_57', '513_58', '133_60', '108_54', '246_61',
+       '555_62', '314_59', '690_60', '516_63', '69_53', '332_57',
+       '233_59', '159_53', '807_60', '10_51', '541_58', '627_64',
+       '958_62', '135_51', '64_50', '2374_64', '58_53', '13_50', '559_59',
+       '354_57', '1405_64', '3_60', '62_51', '311_56')
+write("", file = "../claires-secret-folder/sig_vals/gene/genes.txt")
+
+for (t in top_models){
+  tree_num  = strsplit(t, split="_")[[1]][1]
+  bin  = strsplit(t, split="_")[[1]][2]
+  find_genes(bin, tree_num, long=TRUE, write = TRUE, output_file = "../claires-secret-folder/sig_vals/gene/genes2.txt")
+}
+
+
+```
+
+## Find genes by node
+
+```{r}
+find_genes_node <- function(num, tree, node, output_file = "tmp.txt"){
+  file.create(output_file)
+  write("", output_file)
+  species_internal = format_matrices(glue("../trees/brain2/{num}/"), tree, "species_internal")
+  species = format_matrices(glue("../trees/brain2/{num}/"), tree, "species")
+  adjacency = format_matrices(glue("../trees/brain2/{bin}/"), tree, "adjacency")
+
+  # for (sp in colnames(species_internal[,which(species_internal[as.numeric(node)+1,] != 0)])){
+  #   brain_resid = brain_size[which(brain_size['Binomial'] == sp),]['Brain.resid']
+  #     if (dim(brain_resid)[1] != 0){
+  #        write(glue("{sp},{rownames(species)[which(species[sp] != 0)]}, {brain_resid}"), 
+  #             file = output_file, 
+  #             append=TRUE) 
+  #     }
+  # }
+  
+  for (tr in unlist(get_descendants(node, adjacency))){
+    if (! grepl("^\\d+$", tr)){ # check if tr is leaf (ie ensembl_id)
+      sp = colnames(species)[which(species[tr,] != 0)]
+      brain_resid = brain_size[which(brain_size['Binomial'] == sp),]['Brain.resid']
+      if (dim(brain_resid)[1] != 0){
+        write(glue("{sp},{tr},{brain_resid}"), 
+              file = output_file,
+              append=TRUE)
+      }
+    }
+  }
+  
+  
+  df = read_csv(output_file, col_names = c("species", "ensembl_id", "brain_residual"), show_col_types = FALSE)
+  df <- df[order(df$brain_residual),]
+  write.csv(df,output_file, row.names = FALSE,  quote=F)
+}
+
+
+```
+
+
+
+```{r}
+# Get genes of top nodes
+top_nodes = c('50_26_80', '50_26_79', '51_88_17', '60_3_6', '60_3_7', '60_3_5',
+       '61_299_86', '61_476_135', '61_476_134', '61_476_108',
+       '63_516_157', '63_516_156', '63_516_99', '63_516_98', '63_516_97',
+       '63_516_96')
+
+for (t in top_nodes){
+  bin  = strsplit(t, split="_")[[1]][1]
+  tree  = strsplit(t, split="_")[[1]][2]
+  node = strsplit(t, split="_")[[1]][3]
+  print(glue("{bin}, {tree}, {node}"))
+  output_file = glue("../claires-secret-folder/sig_vals/gene/{t}.csv")
+  find_genes_node(bin, tree, node, output_file)
+
+}
+
+
+```
+
+
+```{r}
+num = bin
+species_internal = format_matrices(glue("../trees/brain2/{num}/"), tree, "species_internal")
+species = format_matrices(glue("../trees/brain2/{num}/"), tree, "species")
+
+bin = "64"
+tree_num = "878"
+node = "73" 
+
+species_internal = format_matrices(glue("../trees/brain2/{bin}"), tree_num, "species_internal")
+species_internal[as.numeric(node)+1, which(species_internal[as.numeric(node)+1,] > 0)]
+species_internal[as.numeric(node)+1, "mesocricetus_auratus"]
+species = format_matrices(glue("../trees/brain2/{bin}/"), tree, "species")
+adjacency = format_matrices(glue("../trees/brain2/{bin}/"), tree, "adjacency")
+
+
+species_internal[node, which(species_internal[node, ] != 0)]
+sp = "saimiri_boliviensis_boliviensis"
+brain_resid = brain_size[which(brain_size['Binomial'] == sp),]['Brain.resid']
+sp %in% brain_size['Binomial']
+```
+
+
+
+# Stats
+
+
+```{r}
+get_x_y <- function(bin, tree_num, var = Inf){
+  # species_internal: gene copy number (rows) of each subtree (column)
+  species_internal = format_matrices(glue("../trees/brain2/{bin}"), tree_num, "species_internal")
+  x = species_internal
+  new_df <- data.frame(colnames(x))
+  colnames(new_df) = c("Binomial")
+  # create a dataframe with only species in x and their brain size 
+  merged = inner_join(new_df, brain_size, by = c("Binomial"))[c("Binomial", "Brain.resid")]
+  x = t(x[na.omit(merged)$Binomial])#%>% scale()
+  x[is.nan(x)] <- 0
+  # y = scale(na.omit(merged$Brain.resid))
+  y = na.omit(merged$Brain.resid)
+  if (var == Inf){
+    return(list(x, y, merged)) 
+  }
+  else{
+    var = as.character(var)
+    x_vec = x[which(x[,var] > 0), var]
+    x_vec = x_vec[which(names(x_vec) %in% merged$Binomial)]
+    y_vec = y[which(x_vec > 0)]
+    return(list(x_vec, y_vec))
+  }
+}
+
+```
+
+## Power Test
+
+- probability that a test of significance will pick up on an effect that is present
+- i can't imagine what a control group would be
+- doesn't rly make sense to do power test?
+
+```{r}
+t = "61_476_108"
+bin = "61"
+tree = "476"
+node = as.numeric(108)
+res = get_x_y(bin, tree, node)
+x = res[[1]]
+y = res[[2]]
+alpha = 0.05
+desired.power = 0.8
+a = 2
+effect.size = 
+pwr.anova.test(k = a, f = effect.size, sig.level = alpha, power = desired.power)
+```
+
+
+## Correlation
+
+```{r}
+cor_all_nodes <- function(x, y, merged, bin, tree_num, output_file){
+  # calculate correlation for all nodes in the tree
+  suppressWarnings({
+    # glmnet1<-glmnet::cv.glmnet(x=x,y=y,type.measure='mse', standardize=FALSE)
+    # co = coef(glmnet1, s = "lambda.min")
+    # inds<-which(co!=0)
+    # variables<-row.names(co)[inds]
+    # variables<-variables[!(variables %in% '(Intercept)')];
+    # variables = as.integer(c(variables))
+    
+    for (var in colnames(x)){
+      var = as.numeric(var)
+      x_vec = x[which(x[,var+1] > 0), var+1]
+      x_vec = x_vec[which(names(x_vec) %in% merged$Binomial)]
+      y_vec = y[which(x_vec > 0)]
+      # +1 b/c R index starts at 1 :( and nodes were made in Python (0 indexed)
+      if (length(unique(x_vec)) >= 2 & length(x_vec[which(x_vec > 1)]) >= 2){       
+        # make sure there's >2 values in CNV that's not 1 (ie > 2 species that have 2 copies of a gene)
+        # make sure there are > 2 x values (at least 2 different CNV values) 
+        tryCatch({
+          correlation = ci_cor(x_vec, y_vec, method = "spearman", type = "bootstrap")
+          write(glue("{bin},{tree_num},{var},{correlation$estimate}, {correlation$interval[1]}, {correlation$interval[2]}"),
+            file = output_file,
+              append = TRUE)}, 
+          error = function(e) {an.error.occured <<- TRUE})
+      }
+    }
+  })
+}
+```
+
+```{r}
+top_models = c('50_13', '50_64', '50_26', '51_135', '51_10', '51_88', '51_62',
+       '52_2', '53_23', '53_58', '53_159', '53_69', '54_213', '54_184',
+       '54_108', '56_311', '57_354', '57_150', '57_278', '57_334',
+       '57_332', '58_541', '58_513', '58_289', '58_444', '58_481',
+       '59_559', '59_585', '59_446', '59_233', '59_314', '60_3', '60_133',
+       '60_807', '60_453', '60_743', '60_690', '61_246', '61_299',
+       '61_476', '62_1663', '62_555', '62_958', '63_1611', '63_516',
+       '64_2374', '64_878', '64_627', '64_880', '64_1405')
+
+output_file = "../claires-secret-folder/sig_vals/gene/correlation_spearman_ci7.txt"
+file.create(output_file)
+write("", output_file)
+suppressWarnings({
+  for (t in top_models){
+    bin  = strsplit(t, split="_")[[1]][1]
+    tree_num  = strsplit(t, split="_")[[1]][2]
+    res = get_x_y(bin, tree_num)
+    cor_all_nodes(res[[1]], res[[2]], res[[3]], bin, tree_num, output_file)
+  }
+})
+
+
+# 2: >= 2 species and gene copies
+# 3: idk
+# 4: > 2 species and gene copies
+# 5: stopped looping glmnet. 
+# 6: test consistency
+```
+
+
+```{r}
+some_nodes = c('57_334_27', '57_332_17', '57_332_0', '58_481_2', '58_481_1',
+       '58_481_0', '61_299_84', '61_299_83', '61_246_156')
+
+some_nodes = c('57_334_27', '58_481_2', '58_481_0', '58_481_1', '59_314_10',
+       '61_476_108', '61_246_156')
+for (t in some_nodes){
+  tree_num  = strsplit(t, split="_")[[1]][2]
+  bin  = strsplit(t, split="_")[[1]][1]
+  var = as.numeric(strsplit(t, split="_")[[1]][3])
+  result = get_x_y(bin, tree_num, var)
+  x_vec = result[[1]]
+  y_vec = result[[2]]
+  # x_vec = x[which(x[,var+1] > 0), var+1]
+  # x_vec = x_vec[which(names(x_vec) %in% merged$Binomial)]
+  # y_vec = y[which(x_vec > 0)]
+  plot(x_vec, y_vec, xlab="Copy Number", ylab="Brain Size Residual", main = t)
+  print(cor(x_vec, y_vec))
+
+}
+```
+
+
+
+```{r}
+# Check subtrees
+t = "63_516_104"
+t = "63_516_104"
+t = "58_148_2"
+t = "51_88_48"
+t = "51_88_23"
+t = "51_88_19"
+
+t = "63_516_1"
+t = "64_878_277"
+
+# should have low cor
+t = "52_2_232"
+t = "60_743_49"
+t = "61_476_108"
+
+
+result = get_x_y(bin, tree_num, var)
+results[[1]]
+tree_num  = strsplit(t, split="_")[[1]][2]
+bin  = strsplit(t, split="_")[[1]][1]
+var = as.numeric(strsplit(t, split="_")[[1]][3])
+
+adj = format_matrices(glue("../trees/brain2/{bin}"), tree_num, "adjacency")
+colnames(adj)[which(adj["103"] != 0)]
+colnames(adj)[which(adj["23"] != 0)]
+
+unlist(get_descendants("96", adj))
+
+
+```
+
+### Plot Correlation
+
+```{r}
+sig_nodes = c('50_26_80', '50_26_79', '51_88_17', '60_3_6', '60_3_7', '60_3_5',
+       '61_299_86', '61_476_135', '61_476_134', '61_476_108',
+       '63_516_157', '63_516_156', '63_516_99', '63_516_98', '63_516_97',
+       '63_516_96')
+t = "63_516_96"
+for (t in sig_nodes){
+  bin = strsplit(t, "_")[[1]][1]
+  tree_num = strsplit(t, "_")[[1]][2]
+  node = strsplit(t, "_")[[1]][3]
+  res = get_x_y(bin, tree_num, node)
+  x = res[[1]]
+  y = res[[2]]
+  cor_val = cor(x, y, method = "spearman")
+  lin.model = lm(y ~ x)
+  plot(x, y, 
+       xlab = "Copy Number", ylab = "Brain Size Residual", 
+       main = glue("{t}\n Correlation: {cor_val}"))
+  abline(lin.model, col = "red")
+}
+
+```
+
+### Plot Subtree Correlation
+
+```{r}
+get_x_cor_num_sp <- function(tree, root = TRUE){
+  bin  = strsplit(tree, split="_")[[1]][1]
+  tree_num  = strsplit(tree, split="_")[[1]][2]
+  node  = strsplit(tree, split="_")[[1]][3]
+  node = as.numeric(node)
+  if (root){ node = 0 }
+  
+  # depth first traversal of adjacency matrix
+  adj = format_matrices(glue("../trees/brain2/{bin}/"), tree_num, "adjacency")
+  species_internal = format_matrices(glue("../trees/brain2/{bin}/"), tree_num, "species_internal")
+  # desc_of_node = unlist(get_descendants(as.character(node), adj))
+  cor_vals = list()
+  x_vals = list()
+  num_species = list()
+  # for (desc in unlist(desc_of_node)){
+  for (desc in rownames(species_internal)){
+    # only plot correlation value of subtrees that are not leaves
+    if (grepl("^\\d+$", desc)){ # check if desc is leaf (ie ensembl_id)
+      # get copy number and brain size data
+      var = desc
+      res = get_x_y(bin, tree_num, var)
+      x_vec = res[[1]]
+      y_vec = res[[2]]
+
+      tryCatch({
+        if (length(unique(x_vec)) < 2){   
+          cor_vals[[length(cor_vals)+1]] = 0
+        }
+        else{
+         cor_vals[[length(cor_vals)+1]] = cor(x_vec, y_vec, method = "spearman")
+        }
+       x_vals[[length(x_vals)+1]] = desc
+       num_species[[length(num_species)+1]] = length(x_vec)
+       })
+    }
+  }
+  cor_vals = unlist(cor_vals)
+  cor_vals[is.na(cor_vals)] <- 0
+  x_vals = unlist(x_vals)
+  num_species = unlist(num_species)
+  return(list(x_vals, cor_vals, num_species))
+}
+
+plot_correlation_of_tree = function(tree, boring = FALSE, res = list()){
+  # get subtree nodes, correlation, and number of species of each subtree
+  if (length(res) == 0){
+    res = get_x_cor_num_sp(tree)
+  }
+  x = res[[1]]
+  y = res[[2]]
+  num_species = as.character(res[[3]])
+  # filter out subtrees w. <2 species
+  num_species = ifelse((as.numeric(num_species) < 5), "", num_species)
+  df <- data.frame(x, y, num_species)
+  if(boring){
+    # plot boring plot
+    plot(x, y,
+      xlab = "node / subtree",
+      ylab = "Spearman Correlation",
+      main = glue("{tree}"))
+    text(x, cor_vals, num_species)
+  }
+  else{
+    df$x <- as.numeric(as.character(df$x))
+    # color by number of species in each subtree
+    color_groups = cut(as.numeric(num_species), breaks = c(-Inf, 10, 20, 30, 40, 50, Inf), labels = c("0-10", "10-20", "20-30", "30-40", "40-50", "50+"))
+    x = as.numeric(x)
+    print(
+      # ggplot(df, aes(x = x, y = y, label = num_species)) +
+      ggplot(df, aes(x = x, y = y, label = num_species)) +
+      geom_point() +
+      scale_x_continuous(breaks = seq(min(df$x), max(df$x), by = 20)) + 
+      scale_color_manual(values = c("0-10" = "red", 
+                                "10-20" = "blue",
+                                "20-30" = "green", 
+                                "30-40" = "purple", 
+                                "40-50" = "gold",
+                                "50+" = "orange")) + 
+      geom_text(aes(colour = color_groups), vjust = 1.5, hjust = 0.5) +
+      geom_text_repel(aes(colour = color_groups), max.overlaps = 100) +   
+      ggtitle(glue("{tree}")))
+  }
+}
+
+```
+
+```{r}
+tree = "61_299_86"
+res = get_x_cor_num_sp(tree)
+res[[3]]
+
+a = list()
+a$"asd" = list(list(1,23), list(2345, 32))
+a$asd[1]
+
+plot_correlation_of_tree(tree, boring = FALSE, res = res)
+
+cor_df = list()
+trees = c('50_26_80', '51_88_17', '60_3_5',
+       '61_299_86', '61_476_135', '61_476_108',
+       '63_516_96')
+for (tree in trees){
+  res = get_x_cor_num_sp(tree)
+  cor_df$x = 
+  }
+}
+
+# cor_df = data.frame(x = numeric(length(trees)), 
+#                    cor = numeric(length(trees)), 
+#                    num_species = numeric(length(trees)), 
+#                    row.names = trees)
+# cor_df <- lapply(cor_df, as.list)
+cor_df = data.frame()
+cor_df$x = list()
+cor_df$x[1] = list(1,2,3)
+
+tree = "60_3_5"
+for (tree in trees){
+  print(tree)
+  plot_correlation_of_tree(tree)
+}
+
+
+```
+
+```{r}
+t = "61_299_86"
+bin  = strsplit(tree, split="_")[[1]][1]
+tree_num  = strsplit(tree, split="_")[[1]][2]
+node  = strsplit(tree, split="_")[[1]][3]
+node = as.numeric(node)
+node = 0
+
+adj = format_matrices(glue("../trees/brain2/{bin}/"), tree_num, "adjacency")
+desc_of_node = unlist(get_descendants(as.character(node), adj))
+cor_vals = list()
+x_vals = list()
+for (desc in unlist(desc_of_node)){
+  if (grepl("^\\d+$", desc)){ # check if desc is leaf (ie ensembl_id)
+    var = as.numeric(desc)
+    res = get_x_y(bin, tree_num)
+    x = res[[1]]
+    y = res[[2]]
+    merged = res[[3]]
+    x_vec = x[which(x[,var+1] > 0), var+1]
+    x_vec = x_vec[which(names(x_vec) %in% merged$Binomial)]
+    y_vec = y[which(x_vec > 0)]
+    num_species = length(unique(colnames(x)))
+    tryCatch({
+      cor_vals[[length(cor_vals)+1]] = cor(x_vec, y_vec, method = "spearman")
+      x_vals[[length(x_vals)+1]] = desc
+    })
+  }
+}
+cor_vals = unlist(cor_vals)
+cor_vals[is.na(cor_vals)] <- 0
+x_vals = unlist(x_vals)
+
+cor_x = 
+```
+
+
+
+```{r}
+# coeficients of the final model
+coef_cv=coef(glmnet1, s = "lambda.min")
+# prediction of the final model
+predict(glmnet1, newx = x[1:5,], s = "lambda.min")
+
+# extract optimal lambda
+lmabda_opt=glmnet1$lambda.min 
+
+# manually plugging lambda into glmnet
+fit_2 = glmnet(x, y,lambda = lmabda_opt) 
+
+# compare cefficients - equal
+cbind(coef_cv,coef(fit_2))
+
+# compare predictions - equal
+cbind(predict(cvfit, newx = x[1:5,], s = "lambda.min"),predict(fit_2, newx = x[1:5,]))
+```
+
+
+# Ensembl Database Lookup
+
+```{r}
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("biomaRt")
+library(biomaRt)
+```
+
+
+```{r}
+library(biomaRt)
+
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+
+# transcript_ids <- c('ENSP00000329165')
+
+# res <- getBM(attributes = c('ensembl_transcript_id_version', 
+#                             'ensembl_gene_id', 
+#                             'external_transcript_name',
+#                             'external_gene_name'),
+#              filters = 'ensembl_transcript_id_version', 
+#              values = transcript_ids,
+#              mart = mart)
+ensembl = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# List of Ensembl IDs
+ensembl_ids = c("ENSP00000329165")
+
+gene_names = getBM(attributes = c('ensembl_gene_id', 'description'), 
+                   filters = 'ensembl_gene_id', 
+                   values = ensembl_ids, 
+                   mart = ensembl)
+
+print(gene_names)
+
+```
+
+
+```{r}
+
+```
+
